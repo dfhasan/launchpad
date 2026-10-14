@@ -1,0 +1,41 @@
+name: Reaper
+
+# Cost control: every night, remove environments whose `expires:` date has passed.
+# Removing the YAML file from Git is what destroys the environment.
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  reap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet pyyaml jsonschema
+
+      - name: Find and remove expired environments
+        id: reap
+        run: echo "reaped=$(python scripts/envctl.py reap)" >> "$GITHUB_OUTPUT"
+
+      - name: Commit and apply
+        if: steps.reap.outputs.reaped != '[]'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REAPED: ${{ steps.reap.outputs.reaped }}
+        run: |
+          git config user.name  "launchpad-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A environments
+          git commit -m "reaper: remove expired environments ${REAPED}"
+          git push
+          gh workflow run apply.yml --ref main
+          echo "### 🧹 Reaped: ${REAPED}" >> "$GITHUB_STEP_SUMMARY"

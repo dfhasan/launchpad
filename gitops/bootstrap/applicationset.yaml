@@ -1,0 +1,40 @@
+# App-of-apps: every folder gitops/apps/<app>/overlays/<env> becomes an Argo CD
+# Application named <app>-<env>, synced automatically from Git.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: launchpad-apps
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - git:
+        repoURL: REPO_URL
+        revision: main
+        directories:
+          - path: gitops/apps/*/overlays/*
+  template:
+    metadata:
+      name: "{{ index .path.segments 2 }}-{{ .path.basename }}"
+      labels:
+        platform: launchpad
+    spec:
+      project: default
+      source:
+        repoURL: REPO_URL
+        targetRevision: main
+        path: "{{ .path.path }}"
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: "{{ index .path.segments 2 }}-{{ .path.basename }}"
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true      # manual kubectl edits are reverted to what Git says
+        syncOptions:
+          - CreateNamespace=true
+          - ServerSideApply=true
+        retry:
+          limit: 5
+          backoff: { duration: 10s, factor: 2, maxDuration: 3m }

@@ -1,0 +1,55 @@
+# In-cluster MySQL for the local demo (on AWS the platform uses RDS instead).
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+spec:
+  clusterIP: None
+  selector: { app: mysql }
+  ports: [{ port: 3306, name: mysql }]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mysql
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  serviceName: mysql
+  replicas: 1
+  selector:
+    matchLabels: { app: mysql }
+  template:
+    metadata:
+      labels: { app: mysql }
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8.4
+          ports: [{ containerPort: 3306, name: mysql }]
+          env:
+            - name: MYSQL_DATABASE
+              value: safebrief
+            - name: MYSQL_USER
+              value: safebrief
+            - name: MYSQL_PASSWORD
+              valueFrom: { secretKeyRef: { name: safebrief-secrets, key: DB_PASSWORD } }
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom: { secretKeyRef: { name: safebrief-secrets, key: DB_ROOT_PASSWORD } }
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "mysqladmin ping -h 127.0.0.1 -u root -p\"$MYSQL_ROOT_PASSWORD\""]
+            initialDelaySeconds: 15
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 100m, memory: 384Mi }
+            limits: { memory: 768Mi }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/mysql }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests: { storage: 2Gi }

@@ -1,0 +1,66 @@
+name: Deploy SafeBrief
+
+# Build -> push -> promote by committing the new tag to Git.
+# Git change is what deploys (ECS via Terraform apply, Kubernetes via Argo CD).
+# Trigger from the app repo with:  gh api repos/<owner>/launchpad/dispatches -f event_type=safebrief-push
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_ref:
+        description: SafeBrief git ref to build
+        default: main
+  repository_dispatch:
+    types: [safebrief-push]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-safebrief
+  cancel-in-progress: false
+
+jobs:
+  build:
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    uses: ./.github/workflows/_build-laravel.yml
+    with:
+      app: safebrief
+      app_repository: dfhasan/safebrief
+      app_ref: ${{ inputs.app_ref || 'main' }}
+      dockerfile: apps/safebrief/Dockerfile
+
+  promote-dev:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # commit the new tag
+      actions: write    # kick off the Apply workflow
+    env:
+      TAG: ${{ needs.build.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Point dev at the new image (ECS + Kubernetes)
+        run: |
+          sed -i -E "s/^image_tag: .*/image_tag: \"${TAG}\"   # set by deploy-safebrief/" environments/safebrief-dev.yaml
+          cd gitops/apps/safebrief/overlays/dev
+          sed -i -E "s/newTag: .*/newTag: \"${TAG}\"/" kustomization.yaml
+
+      - name: Commit
+        run: |
+          if git diff --quiet; then echo "Already on ${TAG}"; exit 0; fi
+          git config user.name  "launchpad-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "deploy(safebrief-dev): ${TAG}"
+          git push
+
+      # Pushes made with GITHUB_TOKEN don't trigger workflows, so start Apply explicitly.
+      - name: Trigger Apply
+        if: vars.AWS_APPLY_ROLE_ARN != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run apply.yml --ref main

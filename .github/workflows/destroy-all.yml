@@ -1,0 +1,50 @@
+name: Destroy everything (stop spending credits)
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "destroy" to tear down all environments and the platform'
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: apply
+  cancel-in-progress: false
+
+jobs:
+  destroy:
+    if: inputs.confirm == 'destroy'
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      BASE_DOMAIN: ${{ vars.BASE_DOMAIN }}
+      CLOUDFLARE_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_APPLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.13.4"
+          terraform_wrapper: false
+
+      - name: Destroy observability
+        if: vars.DATADOG_API_URL != ''
+        env:
+          DATADOG_API_URL: ${{ vars.DATADOG_API_URL }}
+          DD_API_KEY: ${{ secrets.DD_API_KEY }}
+          DD_APP_KEY: ${{ secrets.DD_APP_KEY }}
+        run: scripts/tf.sh observability/datadog destroy
+      - name: Destroy environments
+        run: scripts/tf.sh live/environments destroy
+      - name: Destroy platform
+        run: scripts/tf.sh live/platform destroy

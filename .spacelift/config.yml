@@ -1,0 +1,14 @@
+# Optional: run the same stacks on Spacelift (free tier) instead of GitHub Actions apply.
+# Create 3 stacks in Spacelift pointing at this repo; this file supplies their defaults.
+version: "2"
+stack_defaults:
+  terraform_version: "1.13.4"
+  before_init:
+    - pip install --quiet pyyaml jsonschema && python scripts/envctl.py validate
+stacks:
+  platform:
+    project_root: live/platform
+  environments:
+    project_root: live/environments
+  observability:
+    project_root: observability/datadog

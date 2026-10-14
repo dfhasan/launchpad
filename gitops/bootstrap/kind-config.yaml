@@ -1,0 +1,13 @@
+# Local Kubernetes for the GitOps half of Launchpad (free, runs in Docker).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: launchpad
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30080   # safebrief-dev  -> http://localhost:8080
+        hostPort: 8080
+      - containerPort: 30081   # safebrief-prod -> http://localhost:8081
+        hostPort: 8081
+      - containerPort: 30443   # Argo CD UI     -> https://localhost:8443
+        hostPort: 8443

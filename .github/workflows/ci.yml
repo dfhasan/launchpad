@@ -1,0 +1,139 @@
+name: CI
+
+# Every PR: validate the golden-path YAML, lint + test Terraform offline,
+# scan for misconfigurations, then post real `terraform plan`s on the PR.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write        # OIDC -> AWS, no stored keys
+  pull-requests: write   # plan comment
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_VERSION: "1.13.4"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Validate environment files against the schema
+        run: |
+          pip install --quiet pyyaml jsonschema
+          python scripts/envctl.py validate
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - name: terraform fmt
+        run: terraform fmt -check -recursive -diff
+
+      - name: terraform validate (all roots)
+        run: |
+          for d in bootstrap live/platform live/environments observability/datadog; do
+            echo "::group::$d"
+            terraform -chdir=$d init -backend=false -input=false >/dev/null
+            terraform -chdir=$d validate
+            echo "::endgroup::"
+          done
+
+      - name: terraform test (mocked providers, no cloud needed)
+        run: terraform -chdir=live/environments test
+
+      - uses: terraform-linters/setup-tflint@v5
+      - name: tflint
+        env:
+          GITHUB_TOKEN: ${{ github.token }}   # avoids API rate limits when fetching the AWS ruleset
+        run: |
+          tflint --init
+          tflint --recursive --format compact
+
+      - name: Security scan (Trivy IaC misconfig)
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          scan-type: config
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: "0"     # report-only while the portfolio project evolves
+          trivyignores: .trivyignore
+
+  gitops:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Render every overlay and validate against Kubernetes schemas
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz | tar xz kubeconform
+          for overlay in gitops/apps/*/overlays/*; do
+            echo "::group::$overlay"
+            kubectl kustomize "$overlay" | ./kubeconform -strict -summary -ignore-missing-schemas
+            echo "::endgroup::"
+          done
+
+  plan:
+    needs: [validate, gitops]
+    # Only runs once the AWS side has been bootstrapped (see README step 2).
+    if: vars.AWS_PLAN_ROLE_ARN != ''
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: [live/platform, live/environments]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - name: Plan
+        id: plan
+        env:
+          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          BASE_DOMAIN: ${{ vars.BASE_DOMAIN }}
+          CLOUDFLARE_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          DATADOG_API_KEY_SSM_NAME: ${{ vars.DATADOG_API_KEY_SSM_NAME }}
+        run: |
+          set +e
+          scripts/tf.sh "${{ matrix.stack }}" plan -lock=false > "${{ matrix.stack }}/plan.txt" 2>&1
+          code=$?
+          set -e
+          cat "${{ matrix.stack }}/plan.txt"
+          if [ "$code" -eq 1 ]; then exit 1; fi
+          echo "summary=$(grep -E '^(Plan:|No changes\.)' "${{ matrix.stack }}/plan.txt" | head -1)" >> "$GITHUB_OUTPUT"
+
+      - name: Comment plan on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v8
+        env:
+          STACK: ${{ matrix.stack }}
+          SUMMARY: ${{ steps.plan.outputs.summary }}
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync(`${process.env.STACK}/plan.txt`, 'utf8');
+            const body = [
+              `### 🛰️ Terraform plan — \`${process.env.STACK}\``,
+              `**${process.env.SUMMARY || 'see details'}**`,
+              '<details><summary>Show plan</summary>', '', '```hcl',
+              plan.length > 60000 ? plan.slice(-60000) : plan,
+              '```', '</details>',
+            ].join('\n');
+            await github.rest.issues.createComment({ ...context.repo, issue_number: context.issue.number, body });

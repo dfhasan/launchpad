@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels: { app: worker }
+  template:
+    metadata:
+      labels: { app: worker }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 33
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: worker
+          image: safebrief
+          command: ["php", "/var/www/html/artisan", "queue:work", "--tries=3", "--max-time=3600"]
+          envFrom:
+            - configMapRef: { name: safebrief-config }
+            - secretRef: { name: safebrief-secrets }
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { memory: 384Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }

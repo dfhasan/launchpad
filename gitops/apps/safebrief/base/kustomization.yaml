@@ -1,0 +1,33 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: safebrief
+      app.kubernetes.io/managed-by: argocd
+    includeSelectors: false
+resources:
+  - mysql.yaml
+  - migrate-job.yaml
+  - web.yaml
+  - worker.yaml
+configMapGenerator:
+  - name: safebrief-config
+    literals:
+      - APP_NAME=SafeBrief
+      - APP_ENV=production
+      - APP_DEBUG=false
+      - LOG_CHANNEL=stderr
+      - DB_CONNECTION=mysql
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_DATABASE=safebrief
+      - DB_USERNAME=safebrief
+      - SESSION_DRIVER=database
+      - CACHE_STORE=database
+      - QUEUE_CONNECTION=database
+      - AI_DRIVER=fake
+      - AUTORUN_ENABLED=false
+images:
+  - name: safebrief
+    newName: ghcr.io/dfhasan/safebrief
+    newTag: bootstrap

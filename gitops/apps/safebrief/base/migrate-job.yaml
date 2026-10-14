@@ -1,0 +1,26 @@
+# Runs `migrate` once per sync, after MySQL (wave 0) and before the app (wave 2).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: migrate
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: Never
+      initContainers:
+        - name: wait-for-mysql
+          image: busybox:1.37
+          command: ["sh", "-c", "until nc -z mysql 3306; do echo waiting for mysql; sleep 3; done"]
+      containers:
+        - name: migrate
+          image: safebrief
+          command: ["php", "/var/www/html/artisan", "migrate", "--force"]
+          envFrom:
+            - configMapRef: { name: safebrief-config }
+            - secretRef: { name: safebrief-secrets }

@@ -1,0 +1,105 @@
+name: Build Laravel image (reusable)
+
+# Golden path for building ANY Laravel app: one `uses:` line in the app repo.
+# Pushes to GHCR (free, used by the local GitOps cluster) and to ECR when AWS is set up.
+
+on:
+  workflow_call:
+    inputs:
+      app:
+        description: App name (ECR repo + image name)
+        type: string
+        required: true
+      app_repository:
+        description: owner/repo of the application source
+        type: string
+        required: true
+      app_ref:
+        type: string
+        default: main
+      dockerfile:
+        description: Path to the Dockerfile inside THIS (platform) repo
+        type: string
+        required: true
+    outputs:
+      tag:
+        value: ${{ jobs.build.outputs.tag }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - name: Checkout platform repo (Dockerfile)
+        uses: actions/checkout@v5
+        with:
+          path: platform
+
+      - name: Checkout application
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ inputs.app_repository }}
+          ref: ${{ inputs.app_ref }}
+          path: app
+
+      - name: Image tag = short app SHA
+        id: meta
+        run: echo "tag=$(git -C app rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: AWS credentials (optional)
+        if: vars.AWS_BUILD_ROLE_ARN != ''
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_BUILD_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Login to ECR (optional)
+        id: ecr
+        if: vars.AWS_BUILD_ROLE_ARN != ''
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Compute image names
+        id: names
+        env:
+          OWNER: ${{ github.repository_owner }}
+          ECR: ${{ steps.ecr.outputs.registry }}
+          APP: ${{ inputs.app }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          owner=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
+          tags="ghcr.io/${owner}/${APP}:${TAG}"
+          if [ -n "$ECR" ]; then tags="${tags},${ECR}/${APP}:${TAG}"; fi
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: app
+          file: platform/${{ inputs.dockerfile }}
+          push: true
+          tags: ${{ steps.names.outputs.tags }}
+          cache-from: type=gha,scope=${{ inputs.app }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.app }}
+          provenance: true
+          sbom: true
+
+      - name: Scan image (Trivy)
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: ghcr.io/${{ github.repository_owner }}/${{ inputs.app }}:${{ steps.meta.outputs.tag }}
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "0"

@@ -1,0 +1,88 @@
+name: Create environment
+
+# Self-service: any developer fills this form in the Actions tab.
+# Result: a PR adding environments/<name>.yaml, with the plan posted by CI.
+# Merge it and the environment exists. No tickets, no waiting on the platform team.
+
+on:
+  workflow_dispatch:
+    inputs:
+      name:
+        description: "Environment name (e.g. safebrief-pr-42)"
+        required: true
+      app:
+        description: App
+        type: choice
+        options: [safebrief]
+      team:
+        description: Owning team
+        required: true
+        default: safety
+      size:
+        type: choice
+        options: [small, medium, large]
+        default: small
+      database:
+        type: choice
+        options: [sqlite, mysql]
+        default: sqlite
+      worker:
+        description: Queue worker (mysql only)
+        type: boolean
+        default: false
+      ttl_days:
+        description: Auto-delete after N days (0 = keep)
+        default: "3"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  scaffold:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet pyyaml jsonschema
+
+      - name: Generate environment file
+        env:
+          NAME: ${{ inputs.name }}
+          APP: ${{ inputs.app }}
+          TEAM: ${{ inputs.team }}
+          OWNER: ${{ github.actor }}
+          SIZE: ${{ inputs.size }}
+          DB: ${{ inputs.database }}
+          WORKER: ${{ inputs.worker }}
+          TTL: ${{ inputs.ttl_days }}
+        run: |
+          tag=$(grep -E '^image_tag:' "environments/${APP}-dev.yaml" | sed -E 's/image_tag: *"?([^" ]+)"?.*/\1/' || echo bootstrap)
+          args=(--name "$NAME" --app "$APP" --team "$TEAM" --owner "$OWNER" --size "$SIZE" --database "$DB" --ttl-days "$TTL" --image-tag "$tag")
+          if [ "$WORKER" = "true" ]; then args+=(--worker); fi
+          python scripts/envctl.py new "${args[@]}"
+
+      - name: Open pull request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          # PRs opened with the default GITHUB_TOKEN don't trigger CI. A fine-grained PAT
+          # (or GitHub App token) in LAUNCHPAD_BOT_TOKEN makes the plan comment appear automatically.
+          token: ${{ secrets.LAUNCHPAD_BOT_TOKEN || github.token }}
+          branch: env/${{ inputs.name }}
+          commit-message: "env: create ${{ inputs.name }}"
+          title: "🌱 New environment: ${{ inputs.name }}"
+          body: |
+            Requested by @${{ github.actor }} through the **Create environment** workflow.
+
+            | | |
+            |---|---|
+            | App | `${{ inputs.app }}` |
+            | Size | `${{ inputs.size }}` |
+            | Database | `${{ inputs.database }}` |
+            | Worker | `${{ inputs.worker }}` |
+            | Auto-delete | ${{ inputs.ttl_days }} day(s) |
+
+            CI will validate the file and post the Terraform plan below. Merge to create it.
+          labels: environment

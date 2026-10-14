@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  selector:
+    matchLabels: { app: web }
+  template:
+    metadata:
+      labels: { app: web }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 33        # www-data in serversideup/php
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: web
+          image: safebrief
+          ports: [{ containerPort: 8080, name: http }]
+          envFrom:
+            - configMapRef: { name: safebrief-config }
+            - secretRef: { name: safebrief-secrets }
+          readinessProbe:
+            httpGet: { path: /up, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /up, port: http }
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 100m, memory: 192Mi }
+            limits: { memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+spec:
+  type: NodePort
+  selector: { app: web }
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      nodePort: 30080

@@ -1,0 +1,14 @@
+# yaml-language-server: $schema=../schemas/environment.schema.json
+# Production-like environment. Rename to .yaml to create it (adds RDS — uses credits).
+name: safebrief-staging
+app: safebrief
+team: safety
+owner: dfhasan
+image_tag: "bootstrap"
+size: medium
+replicas: 2
+database: mysql
+worker: true
+spot: false
+env:
+  AI_DRIVER: fake

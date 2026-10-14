@@ -1,0 +1,10 @@
+name: web-prod
+app: safebrief
+team: safety
+owner: dfhasan
+image_tag: abc123
+size: medium
+replicas: 2
+database: mysql
+worker: true
+spot: false

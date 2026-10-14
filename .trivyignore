@@ -1,0 +1,7 @@
+# Accepted risks for a cost-optimised portfolio platform (documented in docs/adr):
+# ALB is public by design
+AVD-AWS-0053
+# HTTP listener is used until a domain + ACM cert are configured (see README: HTTPS)
+AVD-AWS-0054
+# Tasks get public IPs instead of paying for a NAT gateway (ADR-0001); SG only allows the ALB
+AVD-AWS-0164

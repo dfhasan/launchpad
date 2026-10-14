@@ -1,0 +1,10 @@
+# yaml-language-server: $schema=../schemas/environment.schema.json
+# Cheapest possible environment: 1 Spot task, SQLite inside the container.
+name: safebrief-dev
+app: safebrief
+team: safety
+owner: dfhasan
+image_tag: "bootstrap"   # replaced by CI with the git SHA of each build
+primary: true            # reachable on the ALB address until you have a domain
+env:
+  AI_DRIVER: fake
